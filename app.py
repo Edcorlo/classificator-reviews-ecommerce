@@ -4,6 +4,8 @@ import csv
 import random
 import threading
 import time
+import zipfile
+import gzip
 from collections import Counter
 
 import streamlit as st
@@ -158,16 +160,33 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
 """
     st.markdown(html_rows, unsafe_allow_html=True)
 
+# --- FUNCIÓN INTELIGENTE DE APERTURA DE ARCHIVO ---
+def get_file_stream(uploaded):
+    name_lower = uploaded.name.lower()
+    if name_lower.endswith('.zip'):
+        zf = zipfile.ZipFile(uploaded)
+        # Buscar el primer archivo CSV dentro del ZIP
+        csv_names = [n for n in zf.namelist() if n.lower().endswith('.csv')]
+        if not csv_names:
+            raise ValueError("El archivo .zip no contiene ningún archivo .csv en su interior.")
+        raw_stream = zf.open(csv_names[0], 'r')
+        return io.TextIOWrapper(raw_stream, encoding='utf-8', errors='ignore')
+    elif name_lower.endswith('.gz'):
+        raw_stream = gzip.GzipFile(fileobj=uploaded, mode='rb')
+        return io.TextIOWrapper(raw_stream, encoding='utf-8', errors='ignore')
+    else:
+        return io.TextIOWrapper(uploaded, encoding='utf-8', errors='ignore')
+
 # --- 4. BARRA LATERAL (Sidebar UI) ---
 with st.sidebar:
     st.title("⚡ Configuración Engine")
     st.markdown("---")
     
-    # SELECCIONA EL CSV SIN LÍMETE (Hasta 50 GB con el config.toml)
+    # Aceptamos CSV, ZIP o GZ para esquivar el límite de 200 MB de Streamlit Cloud
     uploaded_file = st.file_uploader(
-        "📂 Selecciona cualquier CSV de tu computadora (Sin límite de tamaño):", 
-        type=["csv"],
-        help="El archivo será analizado por partes en stream, garantizando 0 colapsos en la nube."
+        "📂 Selecciona tu CSV o archivo comprimido (.zip / .gz):", 
+        type=["csv", "zip", "gz"],
+        help="¡Tip Pro! Si tu archivo supera los 200 MB, súbelo comprimido en ZIP y la app lo leerá en vivo sin ocupar memoria RAM."
     )
     
     st.markdown("---")
@@ -177,7 +196,7 @@ with st.sidebar:
 
 # --- 5. PANEL PRINCIPAL ---
 st.title("⚡ E-Commerce Sentiment Analytics Engine")
-st.caption("Arquitectura asistida por IA (VADER NLP) - Procesamiento Ilimitado para Streamlit Cloud")
+st.caption("Arquitectura asistida por IA (VADER NLP) - Procesamiento por streaming con soporte de compresión (ZIP / GZ)")
 
 if "is_analyzed" not in st.session_state:
     st.session_state.is_analyzed = False
@@ -188,11 +207,11 @@ if "is_analyzed" not in st.session_state:
     st.session_state.execution_time = 0
 
 if uploaded_file is None:
-    st.info("👈 Por favor, selecciona un archivo CSV desde la barra lateral. No importa qué tan pesado sea.")
+    st.info("👈 Por favor, selecciona un archivo (CSV o ZIP) desde la barra lateral.")
 else:
     try:
-        # CONVERTIR EN FLUJO DE STREAM PURO (0% Uso adicional de RAM)
-        file_stream = io.TextIOWrapper(uploaded_file, encoding='utf-8', errors='ignore')
+        # ABRIMOS EL FLUJO (Descomprimiendo en tiempo real si es .zip o .gz)
+        file_stream = get_file_stream(uploaded_file)
         
         # Leemos solo la primera línea del flujo para obtener los encabezados al instante
         header_line = file_stream.readline()
@@ -200,7 +219,7 @@ else:
         columns = sample_reader[0] if sample_reader else []
 
         if not columns:
-            st.error("No se pudieron detectar columnas en el CSV.")
+            st.error("No se pudieron detectar columnas en el archivo.")
         else:
             text_default_idx = 0
             for cand in ["Text", "text", "Review", "review", "Comment", "comment", "Summary"]:
@@ -230,9 +249,9 @@ else:
                 stats = {"pos_reviews": 0, "neg_reviews": 0}
                 total_records = 0
                 
-                with st.spinner("Procesando archivo sin límite en Streamlit Cloud..."):
+                with st.spinner("Procesando tu archivo por lotes en Streamlit Cloud..."):
                     while True:
-                        # Sacamos únicamente los lotes configurados sin colapsar la RAM
+                        # Sacamos lotes en streaming directamente desde el zip sin gastar RAM
                         batch = [file_stream.readline() for _ in range(lines_batch)]
                         batch = [line for line in batch if line]
                         
