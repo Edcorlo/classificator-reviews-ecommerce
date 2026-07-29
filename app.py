@@ -194,7 +194,7 @@ with st.sidebar:
     
     # Detecta automáticamente la cantidad de hilos/núcleos lógicos según la computadora
     system_cores = os.cpu_count() or 4
-    num_threads = st.slider("Hilos Concurrentes", min_value=1, max_value=max(32, system_cores), value=system_cores)
+    num_threads = st.slider("Hilos Concurrentes", min_value=1, max_value=8, value=system_cores)
     top_words_count = st.slider("Top Términos a procesar", min_value=10, max_value=100, value=30)
     lines_batch = st.select_slider("Líneas en RAM por lote", options=[10000, 25000, 50000, 100000], value=25000)
 
