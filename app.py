@@ -1,4 +1,5 @@
 import io
+import os
 import re
 import csv
 import random
@@ -190,7 +191,10 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    num_threads = st.slider("Hilos Concurrentes", min_value=1, max_value=8, value=4)
+    
+    # Detecta automáticamente la cantidad de hilos/núcleos lógicos según la computadora
+    system_cores = os.cpu_count() or 4
+    num_threads = st.slider("Hilos Concurrentes", min_value=1, max_value=max(32, system_cores), value=system_cores)
     top_words_count = st.slider("Top Términos a procesar", min_value=10, max_value=100, value=30)
     lines_batch = st.select_slider("Líneas en RAM por lote", options=[10000, 25000, 50000, 100000], value=25000)
 
@@ -362,7 +366,7 @@ if st.session_state.is_analyzed:
                 if st.button("📊 View Full Frequency Tally ➔", key="btn_pos", use_container_width=True):
                     show_frequency_tally(pos_counter, "positive", top_words_count)
         else:
-            st.info("La IA no detectó tokens estrictamente positivos.")
+            st.info("La IA no detectó tokens strictly positivos.")
 
     # --- TARJETA Y WORDCLOUD NEGATIVO ---
     with c_neg:
