@@ -1,10 +1,9 @@
-import io
 import os
 import re
-import csv
 import random
 import threading
 import time
+import math
 from collections import Counter
 
 import streamlit as st
@@ -63,18 +62,26 @@ def red_color_func(word, font_size, position, orientation, random_state=None, **
     reds = ["#b91c1c", "#dc2626", "#ef4444", "#991b1b", "#c2410c", "#7f1d1d"]
     return random.choice(reds)
 
-# --- 2. MOTOR DE PROCESAMIENTO MULTIHILO ---
-def process_lines_chunk(lines: list, text_index: int, rating_index: int, pos_counter: Counter, neg_counter: Counter, stats: dict):
+# --- CARGA DE DATOS OPTIMIZADA EN MEMORIA ---
+@st.cache_data
+def load_data(file_path):
+    """Lee el dataset comprimido directamente a la RAM sin saturar Streamlit."""
+    try:
+        df = pd.read_csv(file_path, compression='zip')
+        return df
+    except Exception as e:
+        st.error(f"Error al cargar el archivo: {e}")
+        return None
+
+# --- 2. MOTOR DE PROCESAMIENTO MULTIHILO (Adaptado a Pandas) ---
+def process_dataframe_chunk(df_chunk, text_col, rating_col, pos_counter, neg_counter, stats):
     local_pos_count = 0
     local_neg_count = 0
     
-    for line in lines:
+    for _, row in df_chunk.iterrows():
         try:
-            row = list(csv.reader([line]))[0]
-            if len(row) <= max(text_index, rating_index): continue
-            
-            raw_text = row[text_index]
-            rating_str = row[rating_index].strip()
+            raw_text = str(row[text_col])
+            rating_str = str(row[rating_col]).strip()
             
             clean_text = re.sub(r'[^\w\s]', '', raw_text.lower())
             words = [w for w in clean_text.split() if w not in ALL_STOPWORDS and len(w) > 2 and not w.isdigit()]
@@ -151,9 +158,8 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
     
     for idx, (term, count) in enumerate(top_terms):
         share = (count / total_occurrences) * 100 if total_occurrences > 0 else 0
-        bar_width = (count / max_count) * 100 # Visual normalization against the top term
+        bar_width = (count / max_count) * 100
         
-        # OJO: pegado a la izquierda para evitar problemas con Markdown
         html_rows += f"""
 <div style="display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #f8fafc;">
     <div style="width: 8%; color: #cbd5e1; font-family: monospace; font-size: 14px;">{idx+1:02d}</div>
@@ -181,7 +187,7 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
 with st.sidebar:
     st.title("Configuración Engine")
     st.markdown("---")
-    file_path = st.text_input("Ruta del CSV local:", "Reviews.csv")
+    file_path = st.text_input("Ruta del archivo ZIP:", "dataset.zip")
     
     st.markdown("---")
     max_cpus = os.cpu_count() or 4
@@ -190,7 +196,7 @@ with st.sidebar:
 
 # --- 5. PANEL PRINCIPAL ---
 st.title("E-Commerce Sentiment Analytics Engine")
-st.caption("Arquitectura asistida por IA (VADER NLP) con procesamiento en RAM")
+st.caption("Arquitectura asistida por IA (VADER NLP) con procesamiento concurrente en RAM")
 
 # 5.1 INICIALIZAR MEMORIA (Session State)
 if "is_analyzed" not in st.session_state:
@@ -202,200 +208,195 @@ if "is_analyzed" not in st.session_state:
     st.session_state.execution_time = 0
 
 if not os.path.exists(file_path):
-    st.warning(f"No se encontró el archivo: `{file_path}`. Revisa la ruta en la barra lateral.")
+    st.warning(f"No se encontró el archivo: `{file_path}`. Asegúrate de haberlo subido a GitHub con ese nombre exacto.")
 else:
-    with open(file_path, mode='r', encoding='utf-8', errors='ignore') as f:
-        header_line = f.readline()
-        sample_reader = list(csv.reader([header_line]))
-        columns = sample_reader[0] if sample_reader else []
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        text_col_name = st.selectbox("Columna del TEXTO (Reseña):", columns, index=columns.index("Text") if "Text" in columns else 0)
-    with col_b:
-        rating_col_name = st.selectbox("Columna de CALIFICACIÓN (Score/Rating):", columns, index=columns.index("Score") if "Score" in columns else 0)
-
-    # 5.2 BLOQUE DE PROCESAMIENTO (Solo se ejecuta al presionar Iniciar)
-    if st.button("Iniciar Análisis con IA Multihilo"):
-        text_idx = columns.index(text_col_name)
-        rating_idx = columns.index(rating_col_name)
+    df = load_data(file_path)
+    
+    if df is not None:
+        columns = list(df.columns)
+        st.success(f"✅ ¡Dataset comprimido cargado en RAM exitosamente! Total de registros: {len(df):,}")
         
-        start_time = time.time()
-        
-        with open(file_path, mode='r', encoding='utf-8', errors='ignore') as f:
-            next(f)
-            lines = f.readlines()
-        
-        total_records = len(lines)
-        chunk_size = max(1, total_records // num_threads)
-        chunks = [lines[i * chunk_size : (i + 1) * chunk_size] for i in range(num_threads)]
-        
-        if total_records % num_threads != 0:
-            chunks[-1].extend(lines[num_threads * chunk_size:])
+        with st.expander("Ver vista previa de los datos"):
+            st.dataframe(df.head())
 
-        pos_counter = Counter()
-        neg_counter = Counter()
-        stats = {"pos_reviews": 0, "neg_reviews": 0}
-        threads = []
+        col_a, col_b = st.columns(2)
+        with col_a:
+            text_col_name = st.selectbox("Columna del TEXTO (Reseña):", columns, index=columns.index("text") if "text" in columns else (columns.index("Text") if "Text" in columns else 0))
+        with col_b:
+            rating_col_name = st.selectbox("Columna de CALIFICACIÓN (Score/Rating):", columns, index=columns.index("stars") if "stars" in columns else (columns.index("Score") if "Score" in columns else 0))
 
-        for i in range(len(chunks)):
-            t = threading.Thread(
-                target=process_lines_chunk,
-                args=(chunks[i], text_idx, rating_idx, pos_counter, neg_counter, stats)
-            )
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
-
-        # GUARDAR RESULTADOS EN MEMORIA
-        st.session_state.pos_counter = pos_counter
-        st.session_state.neg_counter = neg_counter
-        st.session_state.stats = stats
-        st.session_state.total_records = total_records
-        st.session_state.execution_time = round(time.time() - start_time, 4)
-        st.session_state.is_analyzed = True
-
-    # 5.3 BLOQUE DE VISUALIZACIÓN (Siempre se muestra si el análisis ya se hizo)
-    if st.session_state.is_analyzed:
-        
-        # Recuperar datos de la memoria
-        pos_counter = st.session_state.pos_counter
-        neg_counter = st.session_state.neg_counter
-        stats = st.session_state.stats
-        
-        st.markdown("---")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Líneas Procesadas", f"{st.session_state.total_records:,}")
-        m2.metric("Tiempo Total", f"{st.session_state.execution_time} seg")
-        m3.metric("Hilos Ejecutados", f"{num_threads}")
-        m4.metric("Agente IA", "NLTK VADER")
-
-        st.markdown("---")
-        c_pos, c_neg = st.columns(2)
-        
-        total_eval_reviews = stats["pos_reviews"] + stats["neg_reviews"] or 1
-        pos_rate = round((stats["pos_reviews"] / total_eval_reviews) * 100, 1)
-        neg_rate = round((stats["neg_reviews"] / total_eval_reviews) * 100, 1)
-
-        # --- TARJETA POSITIVA ---
-        with c_pos:
-            st.markdown(
-                '### 🟢 Customer Satisfaction Analytics &nbsp;<span style="background-color: #dcfce7; color: #15803d; padding: 3px 10px; border-radius: 6px; font-size: 13px; font-weight: bold;">POSITIVE</span>', 
-                unsafe_allow_html=True
-            )
-            st.caption("POSITIVE SENTIMENT WORD CLOUD • NLP Weighted")
+        # 5.2 BLOQUE DE PROCESAMIENTO
+        if st.button("Iniciar Análisis con IA Multihilo"):
+            start_time = time.time()
+            total_records = len(df)
             
-            if pos_counter:
-                wc_pos = WordCloud(
-                    width=700, height=380, background_color="#f0fdf4", color_func=green_color_func, max_words=top_words_count, collocations=False
-                ).generate_from_frequencies(pos_counter)
-                
-                fig, ax = plt.subplots(figsize=(7, 3.8))
-                ax.imshow(wc_pos, interpolation="bilinear")
-                ax.axis("off")
-                fig.patch.set_facecolor('#f0fdf4')
-                st.pyplot(fig)
-                
-                total_pos_words = sum(pos_counter.values())
-                top_pos_term = pos_counter.most_common(1)[0][0] if pos_counter else "N/A"
-                
-                st.markdown(f"""
-                <div style="background-color: #f2fcf5; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 24px; margin-top: 16px; margin-bottom: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="flex: 1;">
-                            <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOTAL POSITIVE WORDS</div>
-                            <div style="color: #059669; font-size: 24px; font-weight: 700; margin-top: 4px;">{total_pos_words:,}</div>
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOP TERM</div>
-                            <div style="color: #059669; font-size: 24px; font-weight: 700; margin-top: 4px;">{top_pos_term}</div>
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">POSITIVE RATE</div>
-                            <div style="color: #059669; font-size: 24px; font-weight: 700; margin-top: 4px;">{pos_rate}%</div>
-                        </div>
+            # División de datos en bloques (Chunks) para los hilos
+            chunk_size = math.ceil(total_records / num_threads)
+            chunks = [df.iloc[i * chunk_size : (i + 1) * chunk_size] for i in range(num_threads)]
+            chunks = [c for c in chunks if not c.empty] # Limpiar chunks vacíos
+
+            pos_counter = Counter()
+            neg_counter = Counter()
+            stats = {"pos_reviews": 0, "neg_reviews": 0}
+            threads = []
+
+            for chunk in chunks:
+                t = threading.Thread(
+                    target=process_dataframe_chunk,
+                    args=(chunk, text_col_name, rating_col_name, pos_counter, neg_counter, stats)
+                )
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            # GUARDAR RESULTADOS EN MEMORIA
+            st.session_state.pos_counter = pos_counter
+            st.session_state.neg_counter = neg_counter
+            st.session_state.stats = stats
+            st.session_state.total_records = total_records
+            st.session_state.execution_time = round(time.time() - start_time, 4)
+            st.session_state.is_analyzed = True
+
+# 5.3 BLOQUE DE VISUALIZACIÓN (Siempre se muestra si el análisis ya se hizo)
+if st.session_state.is_analyzed:
+    
+    pos_counter = st.session_state.pos_counter
+    neg_counter = st.session_state.neg_counter
+    stats = st.session_state.stats
+    
+    st.markdown("---")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Líneas Procesadas", f"{st.session_state.total_records:,}")
+    m2.metric("Tiempo Total (Concurrente)", f"{st.session_state.execution_time} seg")
+    m3.metric("Hilos Ejecutados", f"{num_threads}")
+    m4.metric("Agente IA", "NLTK VADER")
+
+    st.markdown("---")
+    c_pos, c_neg = st.columns(2)
+    
+    total_eval_reviews = stats["pos_reviews"] + stats["neg_reviews"] or 1
+    pos_rate = round((stats["pos_reviews"] / total_eval_reviews) * 100, 1)
+    neg_rate = round((stats["neg_reviews"] / total_eval_reviews) * 100, 1)
+
+    # --- TARJETA POSITIVA ---
+    with c_pos:
+        st.markdown(
+            '### 🟢 Customer Satisfaction Analytics &nbsp;<span style="background-color: #dcfce7; color: #15803d; padding: 3px 10px; border-radius: 6px; font-size: 13px; font-weight: bold;">POSITIVE</span>', 
+            unsafe_allow_html=True
+        )
+        st.caption("POSITIVE SENTIMENT WORD CLOUD • NLP Weighted")
+        
+        if pos_counter:
+            wc_pos = WordCloud(
+                width=700, height=380, background_color="#f0fdf4", color_func=green_color_func, max_words=top_words_count, collocations=False
+            ).generate_from_frequencies(pos_counter)
+            
+            fig, ax = plt.subplots(figsize=(7, 3.8))
+            ax.imshow(wc_pos, interpolation="bilinear")
+            ax.axis("off")
+            fig.patch.set_facecolor('#f0fdf4')
+            st.pyplot(fig)
+            
+            total_pos_words = sum(pos_counter.values())
+            top_pos_term = pos_counter.most_common(1)[0][0] if pos_counter else "N/A"
+            
+            st.markdown(f"""
+            <div style="background-color: #f2fcf5; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 24px; margin-top: 16px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1;">
+                        <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOTAL POSITIVE WORDS</div>
+                        <div style="color: #059669; font-size: 24px; font-weight: 700; margin-top: 4px;">{total_pos_words:,}</div>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOP TERM</div>
+                        <div style="color: #059669; font-size: 24px; font-weight: 700; margin-top: 4px;">{top_pos_term}</div>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">POSITIVE RATE</div>
+                        <div style="color: #059669; font-size: 24px; font-weight: 700; margin-top: 4px;">{pos_rate}%</div>
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
-                
-                col_info, col_btn = st.columns([1.5, 1])
-                with col_info:
-                    st.caption(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 8px;'>📌 {len(pos_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
-                with col_btn:
-                    if st.button("📊 View Full Frequency Tally ➔", key="btn_pos", use_container_width=True):
-                        show_frequency_tally(pos_counter, "positive", top_words_count)
-            else:
-                st.info("La IA no detectó tokens estrictamente positivos.")
-
-        # --- TARJETA NEGATIVA ---
-        with c_neg:
-            st.markdown(
-                '### 🔴 Critical Customer Frustrations &nbsp;<span style="background-color: #fee2e2; color: #b91c1c; padding: 3px 10px; border-radius: 6px; font-size: 13px; font-weight: bold;">NEGATIVE</span>', 
-                unsafe_allow_html=True
-            )
-            st.caption("NEGATIVE SENTIMENT WORD CLOUD • NLP Weighted")
+            </div>
+            """, unsafe_allow_html=True)
             
-            if neg_counter:
-                wc_neg = WordCloud(
-                    width=700, height=380, background_color="#fef2f2", color_func=red_color_func, max_words=top_words_count, collocations=False
-                ).generate_from_frequencies(neg_counter)
-                
-                fig, ax = plt.subplots(figsize=(7, 3.8))
-                ax.imshow(wc_neg, interpolation="bilinear")
-                ax.axis("off")
-                fig.patch.set_facecolor('#fef2f2')
-                st.pyplot(fig)
-                
-                total_neg_words = sum(neg_counter.values())
-                top_neg_term = neg_counter.most_common(1)[0][0] if neg_counter else "N/A"
-                
-                st.markdown(f"""
-                <div style="background-color: #fff5f5; border: 1px solid #fecaca; border-radius: 8px; padding: 16px 24px; margin-top: 16px; margin-bottom: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="flex: 1;">
-                            <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOTAL FRUSTRATIONS</div>
-                            <div style="color: #dc2626; font-size: 24px; font-weight: 700; margin-top: 4px;">{total_neg_words:,}</div>
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOP COMPLAINT</div>
-                            <div style="color: #dc2626; font-size: 24px; font-weight: 700; margin-top: 4px;">{top_neg_term}</div>
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">NEGATIVE RATE</div>
-                            <div style="color: #dc2626; font-size: 24px; font-weight: 700; margin-top: 4px;">{neg_rate}%</div>
-                        </div>
+            col_info, col_btn = st.columns([1.5, 1])
+            with col_info:
+                st.caption(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 8px;'>📌 {len(pos_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
+            with col_btn:
+                if st.button("📊 View Full Frequency Tally ➔", key="btn_pos", use_container_width=True):
+                    show_frequency_tally(pos_counter, "positive", top_words_count)
+        else:
+            st.info("La IA no detectó tokens estrictamente positivos.")
+
+    # --- TARJETA NEGATIVA ---
+    with c_neg:
+        st.markdown(
+            '### 🔴 Critical Customer Frustrations &nbsp;<span style="background-color: #fee2e2; color: #b91c1c; padding: 3px 10px; border-radius: 6px; font-size: 13px; font-weight: bold;">NEGATIVE</span>', 
+            unsafe_allow_html=True
+        )
+        st.caption("NEGATIVE SENTIMENT WORD CLOUD • NLP Weighted")
+        
+        if neg_counter:
+            wc_neg = WordCloud(
+                width=700, height=380, background_color="#fef2f2", color_func=red_color_func, max_words=top_words_count, collocations=False
+            ).generate_from_frequencies(neg_counter)
+            
+            fig, ax = plt.subplots(figsize=(7, 3.8))
+            ax.imshow(wc_neg, interpolation="bilinear")
+            ax.axis("off")
+            fig.patch.set_facecolor('#fef2f2')
+            st.pyplot(fig)
+            
+            total_neg_words = sum(neg_counter.values())
+            top_neg_term = neg_counter.most_common(1)[0][0] if neg_counter else "N/A"
+            
+            st.markdown(f"""
+            <div style="background-color: #fff5f5; border: 1px solid #fecaca; border-radius: 8px; padding: 16px 24px; margin-top: 16px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1;">
+                        <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOTAL FRUSTRATIONS</div>
+                        <div style="color: #dc2626; font-size: 24px; font-weight: 700; margin-top: 4px;">{total_neg_words:,}</div>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">TOP COMPLAINT</div>
+                        <div style="color: #dc2626; font-size: 24px; font-weight: 700; margin-top: 4px;">{top_neg_term}</div>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-family: monospace; color: #8899a6; font-size: 11px; letter-spacing: 0.8px;">NEGATIVE RATE</div>
+                        <div style="color: #dc2626; font-size: 24px; font-weight: 700; margin-top: 4px;">{neg_rate}%</div>
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
-                
-                col_info, col_btn = st.columns([1.5, 1])
-                with col_info:
-                    st.caption(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 8px;'>📌 {len(neg_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
-                with col_btn:
-                    if st.button("View Full Frequency Tally ➔", key="btn_neg", use_container_width=True):
-                        show_frequency_tally(neg_counter, "negative", top_words_count)
-            else:
-                st.info("La IA no detectó tokens estrictamente negativos.")
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col_info, col_btn = st.columns([1.5, 1])
+            with col_info:
+                st.caption(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 8px;'>📌 {len(neg_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
+            with col_btn:
+                if st.button("View Full Frequency Tally ➔", key="btn_neg", use_container_width=True):
+                    show_frequency_tally(neg_counter, "negative", top_words_count)
+        else:
+            st.info("La IA no detectó tokens estrictamente negativos.")
 
-        # --- GRÁFICA MULTIVARIABLE ---
-        st.markdown("---")
-        st.subheader("Frecuencia Comparativa (Plotly Express)")
-        
-        pos_data = [{"Palabra": w, "Frecuencia": c, "Sentimiento": "Positivo"} for w, c in pos_counter.most_common(15)]
-        neg_data = [{"Palabra": w, "Frecuencia": c, "Sentimiento": "Negativo"} for w, c in neg_counter.most_common(15)]
-        
-        df_combined = pos_data + neg_data
-        if df_combined:
-            fig_bar = px.bar(
-                df_combined,
-                x="Palabra",
-                y="Frecuencia",
-                color="Sentimiento",
-                barmode="group",
-                color_discrete_map={"Positivo": "#16a34a", "Negativo": "#dc2626"},
-                title="Top Términos Comparativos Validados por IA"
-            )
-            fig_bar.update_layout(template="plotly_dark", height=420)
-            st.plotly_chart(fig_bar, use_container_width=True)
+    # --- GRÁFICA MULTIVARIABLE (MÓDULO VDB) ---
+    st.markdown("---")
+    st.subheader("Frecuencia Comparativa (Plotly Express)")
+    
+    pos_data = [{"Palabra": w, "Frecuencia": c, "Sentimiento": "Positivo"} for w, c in pos_counter.most_common(15)]
+    neg_data = [{"Palabra": w, "Frecuencia": c, "Sentimiento": "Negativo"} for w, c in neg_counter.most_common(15)]
+    
+    df_combined = pos_data + neg_data
+    if df_combined:
+        fig_bar = px.bar(
+            df_combined,
+            x="Palabra",
+            y="Frecuencia",
+            color="Sentimiento",
+            barmode="group",
+            color_discrete_map={"Positivo": "#16a34a", "Negativo": "#dc2626"},
+            title="Top Términos Comparativos Validados por IA"
+        )
+        fig_bar.update_layout(template="plotly_dark", height=420)
+        st.plotly_chart(fig_bar, use_container_width=True)
