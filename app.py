@@ -288,7 +288,7 @@ else:
     except Exception as e:
         st.error(f"Error procesando el archivo: {str(e)}")
 
-# --- 6. VISUALIZACIÓN ---
+# --- 6. VISUALIZACIÓN (100% ALINEADA Y SIMÉTRICA) ---
 if st.session_state.is_analyzed:
     pos_counter = st.session_state.pos_counter
     neg_counter = st.session_state.neg_counter
@@ -310,10 +310,15 @@ if st.session_state.is_analyzed:
 
     # --- TARJETA Y WORDCLOUD POSITIVO ---
     with c_pos:
-        st.markdown(
-            '### 🟢 Customer Satisfaction Analytics &nbsp;<span style="background-color: #dcfce7; color: #15803d; padding: 3px 10px; border-radius: 6px; font-size: 13px; font-weight: bold;">POSITIVE</span>', 
-            unsafe_allow_html=True
-        )
+        # Título y Badge alineados con columnas para evitar saltos de línea indeseados en HTML
+        tcol1, tcol2 = st.columns([0.8, 0.2])
+        with tcol1:
+            st.markdown("### 🟢 Customer Satisfaction Analytics")
+        with tcol2:
+            st.markdown(
+                '<div style="text-align: right; padding-top: 6px;"><span style="background-color: #dcfce7; color: #15803d; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold;">POSITIVE</span></div>', 
+                unsafe_allow_html=True
+            )
         st.caption("POSITIVE SENTIMENT WORD CLOUD • NLP Weighted")
         
         if pos_counter:
@@ -349,9 +354,10 @@ if st.session_state.is_analyzed:
             </div>
             """, unsafe_allow_html=True)
             
-            col_info, col_btn = st.columns([1.5, 1])
+            # Alineación exacta del botón y el conteo de términos
+            col_info, col_btn = st.columns([1.3, 1])
             with col_info:
-                st.caption(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 8px;'>📌 {len(pos_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>📌 {len(pos_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
             with col_btn:
                 if st.button("📊 View Full Frequency Tally ➔", key="btn_pos", use_container_width=True):
                     show_frequency_tally(pos_counter, "positive", top_words_count)
@@ -360,10 +366,15 @@ if st.session_state.is_analyzed:
 
     # --- TARJETA Y WORDCLOUD NEGATIVO ---
     with c_neg:
-        st.markdown(
-            '### 🔴 Critical Customer Frustrations &nbsp;<span style="background-color: #fee2e2; color: #b91c1c; padding: 3px 10px; border-radius: 6px; font-size: 13px; font-weight: bold;">NEGATIVE</span>', 
-            unsafe_allow_html=True
-        )
+        # Título y Badge alineados con columnas simétricas a la tarjeta positiva
+        tcol1_n, tcol2_n = st.columns([0.8, 0.2])
+        with tcol1_n:
+            st.markdown("### 🔴 Critical Customer Frustrations")
+        with tcol2_n:
+            st.markdown(
+                '<div style="text-align: right; padding-top: 6px;"><span style="background-color: #fee2e2; color: #b91c1c; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold;">NEGATIVE</span></div>', 
+                unsafe_allow_html=True
+            )
         st.caption("NEGATIVE SENTIMENT WORD CLOUD • NLP Weighted")
         
         if neg_counter:
@@ -399,10 +410,11 @@ if st.session_state.is_analyzed:
             </div>
             """, unsafe_allow_html=True)
             
-            col_info, col_btn = st.columns([1.5, 1])
-            with col_info:
-                st.caption(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 8px;'>📌 {len(neg_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
-            with col_btn:
+            # Alineación exacta del botón y el conteo de términos
+            col_info_n, col_btn_n = st.columns([1.3, 1])
+            with col_info_n:
+                st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>📌 {len(neg_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
+            with col_btn_n:
                 if st.button("📊 View Full Frequency Tally ➔", key="btn_neg", use_container_width=True):
                     show_frequency_tally(neg_counter, "negative", top_words_count)
         else:
