@@ -65,11 +65,26 @@ def red_color_func(word, font_size, position, orientation, random_state=None, **
     reds = ["#b91c1c", "#dc2626", "#ef4444", "#991b1b", "#c2410c", "#7f1d1d"]
     return random.choice(reds)
 
-# --- 2. MOTOR DE PROCESAMIENTO POR LOTES (RAM-SAFE EN LA NUBE) ---
-def process_lines_chunk(lines: list, text_index: int, rating_index: int, pos_counter: Counter, neg_counter: Counter, stats: dict):
+# --- 2. MOTOR DE PROCESAMIENTO POR LOTES CON FILTROS ---
+def process_lines_chunk(
+    lines: list, 
+    text_index: int, 
+    rating_index: int, 
+    pos_counter: Counter, 
+    neg_counter: Counter, 
+    stats: dict,
+    min_rating: int,
+    max_rating: int,
+    min_words: int,
+    max_words: int,
+    keyword_filter: str
+):
     local_pos_count = 0
     local_neg_count = 0
+    local_filtered_out = 0
     
+    kw_lower = keyword_filter.lower().strip() if keyword_filter else None
+
     for line in lines:
         try:
             row = list(csv.reader([line]))[0]
@@ -79,6 +94,31 @@ def process_lines_chunk(lines: list, text_index: int, rating_index: int, pos_cou
             raw_text = row[text_index]
             rating_str = row[rating_index].strip()
             
+            # 1. FILTRO POR PALABRA CLAVE (si existe, la reseña DEBE contener la palabra)
+            if kw_lower and kw_lower not in raw_text.lower():
+                local_filtered_out += 1
+                continue
+
+            # 2. FILTRO POR RANGO DE ESTRELLAS / CALIFICACIÓN
+            val = None
+            if rating_str.isdigit():
+                val = int(rating_str)
+            else:
+                r_lower = rating_str.lower()
+                if r_lower in ['positive', 'pos', 'good']: val = 5
+                elif r_lower in ['negative', 'neg', 'bad']: val = 1
+                elif r_lower in ['neutral']: val = 3
+                
+            if val is not None and (val < min_rating or val > max_rating):
+                local_filtered_out += 1
+                continue
+
+            # 3. FILTRO POR LONGITUD DEL TEXTO (Número de palabras)
+            words_raw = raw_text.split()
+            if len(words_raw) < min_words or len(words_raw) > max_words:
+                local_filtered_out += 1
+                continue
+
             clean_text = re.sub(r'[^\w\s]', '', raw_text.lower())
             words = [w for w in clean_text.split() if w not in ALL_STOPWORDS and len(w) > 2 and not w.isdigit()]
             
@@ -91,8 +131,7 @@ def process_lines_chunk(lines: list, text_index: int, rating_index: int, pos_cou
             is_pos_review = False
             is_neg_review = False
 
-            if rating_str.isdigit():
-                val = int(rating_str)
+            if val is not None:
                 if val >= 4: is_pos_review = True
                 elif val <= 2: is_neg_review = True
             else:
@@ -121,6 +160,7 @@ def process_lines_chunk(lines: list, text_index: int, rating_index: int, pos_cou
 
     stats["pos_reviews"] += local_pos_count
     stats["neg_reviews"] += local_neg_count
+    stats["filtered_out"] += local_filtered_out
 
 # --- 3. MODAL DE FRECUENCIA DETALLADA ---
 @st.dialog("Full Frequency Tally", width="large")
@@ -166,7 +206,6 @@ def get_file_stream(uploaded):
     name_lower = uploaded.name.lower()
     if name_lower.endswith('.zip'):
         zf = zipfile.ZipFile(uploaded)
-        # Buscar el primer archivo CSV dentro del ZIP
         csv_names = [n for n in zf.namelist() if n.lower().endswith('.csv')]
         if not csv_names:
             raise ValueError("El archivo .zip no contiene ningún archivo .csv en su interior.")
@@ -178,12 +217,11 @@ def get_file_stream(uploaded):
     else:
         return io.TextIOWrapper(uploaded, encoding='utf-8', errors='ignore')
 
-# --- 4. BARRA LATERAL (Sidebar UI) ---
+# --- 4. BARRA LATERAL (Sidebar UI con FILTROS) ---
 with st.sidebar:
     st.title("⚡ Configuración Engine")
     st.markdown("---")
     
-    # Aceptamos CSV, ZIP o GZ para esquivar el límite de 200 MB de Streamlit Cloud
     uploaded_file = st.file_uploader(
         "📂 Selecciona tu CSV o archivo comprimido (.zip / .gz):", 
         type=["csv", "zip", "gz"],
@@ -191,10 +229,46 @@ with st.sidebar:
     )
     
     st.markdown("---")
+    st.subheader("🔍 Filtros de Reseñas")
     
-    # Detecta automáticamente la cantidad de hilos/núcleos lógicos según la computadora
-    system_cores = os.cpu_count() or 4
-    num_threads = st.slider("Hilos Concurrentes", min_value=1, max_value=8, value=system_cores)
+    # Filtro de Estrellas / Calificación
+    rating_range = st.slider(
+        "⭐ Rango de Estrellas (Rating):", 
+        min_value=1, 
+        max_value=5, 
+        value=(1, 5),
+        help="Filtra para analizar únicamente reseñas entre este rango de puntuación."
+    )
+    
+    # Filtro de Longitud de Palabras (para quitar spam muy corto o textos infinitos)
+    word_count_range = st.slider(
+        "📝 Longitud de reseña (# de palabras):",
+        min_value=1,
+        max_value=300,
+        value=(3, 200),
+        help="Descarta reseñas demasiado cortas o extremadamente largas."
+    )
+    
+    # Filtro por Palabra Clave
+    keyword_filter = st.text_input(
+        "🎯 Filtrar por palabra clave:",
+        value="",
+        placeholder="Ej: battery, shipping, screen...",
+        help="Si escribes algo aquí, el motor sólo procesará las reseñas que contengan esta palabra exacto."
+    )
+
+    st.markdown("---")
+    st.subheader("⚙️ Rendimiento en la Nube")
+    
+    # Recomendación para Streamlit Cloud (tope inteligente en 8 hilos para evitar caídas de RAM)
+    system_cores = min(os.cpu_count() or 4, 8)
+    num_threads = st.slider(
+        "Hilos Concurrentes (vCPUs Cloud)", 
+        min_value=1, 
+        max_value=8, 
+        value=system_cores,
+        help="Ajustado al límite de seguridad para la nube de Streamlit Cloud (máx. 8 hilos)."
+    )
     top_words_count = st.slider("Top Términos a procesar", min_value=10, max_value=100, value=30)
     lines_batch = st.select_slider("Líneas en RAM por lote", options=[10000, 25000, 50000, 100000], value=25000)
 
@@ -214,10 +288,8 @@ if uploaded_file is None:
     st.info("👈 Por favor, selecciona un archivo (CSV o ZIP) desde la barra lateral.")
 else:
     try:
-        # ABRIMOS EL FLUJO (Descomprimiendo en tiempo real si es .zip o .gz)
         file_stream = get_file_stream(uploaded_file)
         
-        # Leemos solo la primera línea del flujo para obtener los encabezados al instante
         header_line = file_stream.readline()
         sample_reader = list(csv.reader([header_line]))
         columns = sample_reader[0] if sample_reader else []
@@ -243,19 +315,18 @@ else:
             with col_b:
                 rating_col_name = st.selectbox("Columna de CALIFICACIÓN (Rating):", columns, index=rating_default_idx)
 
-            if st.button("🚀 Iniciar Análisis de Gran Escala"):
+            if st.button("🚀 Iniciar Análisis con Filtros"):
                 text_idx = columns.index(text_col_name)
                 rating_idx = columns.index(rating_col_name)
                 
                 start_time = time.time()
                 pos_counter = Counter()
                 neg_counter = Counter()
-                stats = {"pos_reviews": 0, "neg_reviews": 0}
+                stats = {"pos_reviews": 0, "neg_reviews": 0, "filtered_out": 0}
                 total_records = 0
                 
-                with st.spinner("Procesando tu archivo por lotes en Streamlit Cloud..."):
+                with st.spinner("Procesando tu archivo por lotes y aplicando filtros..."):
                     while True:
-                        # Sacamos lotes en streaming directamente desde el zip sin gastar RAM
                         batch = [file_stream.readline() for _ in range(lines_batch)]
                         batch = [line for line in batch if line]
                         
@@ -264,7 +335,6 @@ else:
                             
                         total_records += len(batch)
                         
-                        # Dividir el lote y procesar con multihilo
                         chunk_size = max(1, len(batch) // num_threads)
                         chunks = [batch[i * chunk_size : (i + 1) * chunk_size] for i in range(num_threads)]
                         if len(batch) % num_threads != 0:
@@ -274,7 +344,19 @@ else:
                         for i in range(len(chunks)):
                             t = threading.Thread(
                                 target=process_lines_chunk,
-                                args=(chunks[i], text_idx, rating_idx, pos_counter, neg_counter, stats)
+                                args=(
+                                    chunks[i], 
+                                    text_idx, 
+                                    rating_idx, 
+                                    pos_counter, 
+                                    neg_counter, 
+                                    stats,
+                                    rating_range[0],
+                                    rating_range[1],
+                                    word_count_range[0],
+                                    word_count_range[1],
+                                    keyword_filter
+                                )
                             )
                             threads.append(t)
                             t.start()
@@ -292,7 +374,7 @@ else:
     except Exception as e:
         st.error(f"Error procesando el archivo: {str(e)}")
 
-# --- 6. VISUALIZACIÓN (100% ALINEADA Y SIMÉTRICA) ---
+# --- 6. VISUALIZACIÓN ---
 if st.session_state.is_analyzed:
     pos_counter = st.session_state.pos_counter
     neg_counter = st.session_state.neg_counter
@@ -300,10 +382,10 @@ if st.session_state.is_analyzed:
     
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Líneas Procesadas", f"{st.session_state.total_records:,}")
-    m2.metric("Tiempo Total", f"{st.session_state.execution_time} seg")
-    m3.metric("Hilos Ejecutados", f"{num_threads}")
-    m4.metric("Agente IA", "NLTK VADER")
+    m1.metric("Líneas Analizadas", f"{st.session_state.total_records:,}")
+    m2.metric("Descartadas p/ Filtros", f"{stats['filtered_out']:,}")
+    m3.metric("Tiempo de Cálculo", f"{st.session_state.execution_time} seg")
+    m4.metric("Hilos Ejecutados", f"{num_threads}")
 
     st.markdown("---")
     c_pos, c_neg = st.columns(2)
@@ -314,7 +396,6 @@ if st.session_state.is_analyzed:
 
     # --- TARJETA Y WORDCLOUD POSITIVO ---
     with c_pos:
-        # Título y Badge alineados con columnas para evitar saltos de línea indeseados en HTML
         tcol1, tcol2 = st.columns([0.8, 0.2])
         with tcol1:
             st.markdown("### 🟢 Customer Satisfaction Analytics")
@@ -358,7 +439,6 @@ if st.session_state.is_analyzed:
             </div>
             """, unsafe_allow_html=True)
             
-            # Alineación exacta del botón y el conteo de términos
             col_info, col_btn = st.columns([1.3, 1])
             with col_info:
                 st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>📌 {len(pos_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
@@ -366,11 +446,10 @@ if st.session_state.is_analyzed:
                 if st.button("📊 View Full Frequency Tally ➔", key="btn_pos", use_container_width=True):
                     show_frequency_tally(pos_counter, "positive", top_words_count)
         else:
-            st.info("La IA no detectó tokens strictly positivos.")
+            st.info("La IA no detectó tokens strictly positivos (o fueron filtrados).")
 
     # --- TARJETA Y WORDCLOUD NEGATIVO ---
     with c_neg:
-        # Título y Badge alineados con columnas simétricas a la tarjeta positiva
         tcol1_n, tcol2_n = st.columns([0.8, 0.2])
         with tcol1_n:
             st.markdown("### 🔴 Critical Customer Frustrations")
@@ -414,7 +493,6 @@ if st.session_state.is_analyzed:
             </div>
             """, unsafe_allow_html=True)
             
-            # Alineación exacta del botón y el conteo de términos
             col_info_n, col_btn_n = st.columns([1.3, 1])
             with col_info_n:
                 st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>📌 {len(neg_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
@@ -422,9 +500,9 @@ if st.session_state.is_analyzed:
                 if st.button("📊 View Full Frequency Tally ➔", key="btn_neg", use_container_width=True):
                     show_frequency_tally(neg_counter, "negative", top_words_count)
         else:
-            st.info("La IA no detectó tokens estrictamente negativos.")
+            st.info("La IA no detectó tokens estrictamente negativos (o fueron filtrados).")
 
-    # --- GRÁFICA MULTIVARIABLE (BAR CHART) ---
+    # --- GRÁFICA MULTIVARIABLE ---
     st.markdown("---")
     st.subheader("📊 Frecuencia Comparativa (Plotly Express)")
     
