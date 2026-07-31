@@ -22,7 +22,7 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="E-Commerce Sentiment Engine (Unlimited CSV)",
-    page_icon=None,
+    page_icon="💡",
     layout="wide"
 )
 
