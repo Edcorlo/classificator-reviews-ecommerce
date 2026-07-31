@@ -19,14 +19,14 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.sentiment import SentimentIntensityAnalyzer
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="E-Commerce Sentiment Engine (Unlimited CSV)",
-    page_icon="⚡",
+    page_icon=None,
     layout="wide"
 )
 
-# --- 1. CONFIGURACIÓN DEL AGENTE DE IA (VADER) Y STOPWORDS ---
+# --- 1. AI AGENT (VADER) & STOPWORDS CONFIGURATION ---
 @st.cache_resource
 def setup_nlp_agent():
     for corpus in ['stopwords', 'vader_lexicon']:
@@ -42,7 +42,7 @@ def setup_nlp_agent():
             
     nltk.download('vader_lexicon', quiet=True)
     
-    base_stops = set(stopwords.words('english'))
+    base_stopwords = set(stopwords.words('english'))
     domain_noise = {
         'product', 'amazon', 'bought', 'item', 'one', 'would', 'get', 'like', 'use', 'used', 
         'using', 'time', 'even', 'much', 'really', 'just', 'also', 'order', 'ordered', 'buy', 
@@ -51,12 +51,12 @@ def setup_nlp_agent():
         'eat', 'drink', 'water', 'price', 'tried', 'try', 'make', 'found', 'find', 'little', 
         'two', 'way', 'since', 'made', 'dont', 'didnt', 'could', 'thought', 'something', 'ive'
     }
-    return base_stops.union(domain_noise), SentimentIntensityAnalyzer()
+    return base_stopwords.union(domain_noise), SentimentIntensityAnalyzer()
 
 ALL_STOPWORDS, SIA_AGENT = setup_nlp_agent()
 SENTIMENT_CACHE = {}
 
-# --- FUNCIONES DE COLOR PARA WORDCLOUD ---
+# --- COLOR FUNCTIONS FOR WORDCLOUD ---
 def green_color_func(word, font_size, position, orientation, random_state=None, **kwargs):
     greens = ["#15803d", "#16a34a", "#059669", "#047857", "#22c55e", "#14532d"]
     return random.choice(greens)
@@ -65,7 +65,7 @@ def red_color_func(word, font_size, position, orientation, random_state=None, **
     reds = ["#b91c1c", "#dc2626", "#ef4444", "#991b1b", "#c2410c", "#7f1d1d"]
     return random.choice(reds)
 
-# --- 2. MOTOR DE PROCESAMIENTO POR LOTES CON FILTROS ---
+# --- 2. BATCH PROCESSING ENGINE WITH FILTERS ---
 def process_lines_chunk(
     lines: list, 
     text_index: int, 
@@ -94,12 +94,12 @@ def process_lines_chunk(
             raw_text = row[text_index]
             rating_str = row[rating_index].strip()
             
-            # 1. FILTRO POR PALABRA CLAVE (si existe, la reseña DEBE contener la palabra)
+            # 1. KEYWORD FILTER (if provided, the review MUST contain the keyword)
             if kw_lower and kw_lower not in raw_text.lower():
                 local_filtered_out += 1
                 continue
 
-            # 2. FILTRO POR RANGO DE ESTRELLAS / CALIFICACIÓN
+            # 2. STAR RATING / SCORE FILTER
             val = None
             if rating_str.isdigit():
                 val = int(rating_str)
@@ -113,7 +113,7 @@ def process_lines_chunk(
                 local_filtered_out += 1
                 continue
 
-            # 3. FILTRO POR LONGITUD DEL TEXTO (Número de palabras)
+            # 3. TEXT LENGTH FILTER (Word count)
             words_raw = raw_text.split()
             if len(words_raw) < min_words or len(words_raw) > max_words:
                 local_filtered_out += 1
@@ -162,7 +162,7 @@ def process_lines_chunk(
     stats["neg_reviews"] += local_neg_count
     stats["filtered_out"] += local_filtered_out
 
-# --- 3. MODAL DE FRECUENCIA DETALLADA ---
+# --- 3. DETAILED FREQUENCY MODAL ---
 @st.dialog("Full Frequency Tally", width="large")
 def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
     top_terms = counter.most_common(top_n)
@@ -201,14 +201,14 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
 """
     st.markdown(html_rows, unsafe_allow_html=True)
 
-# --- FUNCIÓN INTELIGENTE DE APERTURA DE ARCHIVO ---
+# --- SMART FILE STREAM FUNCTION ---
 def get_file_stream(uploaded):
     name_lower = uploaded.name.lower()
     if name_lower.endswith('.zip'):
         zf = zipfile.ZipFile(uploaded)
         csv_names = [n for n in zf.namelist() if n.lower().endswith('.csv')]
         if not csv_names:
-            raise ValueError("El archivo .zip no contiene ningún archivo .csv en su interior.")
+            raise ValueError("The .zip file does not contain any .csv file inside.")
         raw_stream = zf.open(csv_names[0], 'r')
         return io.TextIOWrapper(raw_stream, encoding='utf-8', errors='ignore')
     elif name_lower.endswith('.gz'):
@@ -217,64 +217,64 @@ def get_file_stream(uploaded):
     else:
         return io.TextIOWrapper(uploaded, encoding='utf-8', errors='ignore')
 
-# --- 4. BARRA LATERAL (Sidebar UI con FILTROS) ---
+# --- 4. SIDEBAR (UI with FILTERS) ---
 with st.sidebar:
-    st.title("⚡ Configuración Engine")
+    st.title("Engine Settings")
     st.markdown("---")
     
     uploaded_file = st.file_uploader(
-        "📂 Selecciona tu CSV o archivo comprimido (.zip / .gz):", 
+        "Select your CSV or compressed file (.zip / .gz):", 
         type=["csv", "zip", "gz"],
-        help="¡Tip Pro! Si tu archivo supera los 200 MB, súbelo comprimido en ZIP y la app lo leerá en vivo sin ocupar memoria RAM."
+        help="Pro Tip! If your file exceeds 200 MB, upload it compressed in ZIP and the app will read it live without consuming RAM."
     )
     
     st.markdown("---")
-    st.subheader("🔍 Filtros de Reseñas")
+    st.subheader("Review Filters")
     
-    # Filtro de Estrellas / Calificación
+    # Star Rating Filter
     rating_range = st.slider(
-        "⭐ Rango de Estrellas (Rating):", 
+        "Star Rating Range:", 
         min_value=1, 
         max_value=5, 
         value=(1, 5),
-        help="Filtra para analizar únicamente reseñas entre este rango de puntuación."
+        help="Filter to analyze only reviews within this rating range."
     )
     
-    # Filtro de Longitud de Palabras (para quitar spam muy corto o textos infinitos)
+    # Word Length Filter (to remove short spam or endless texts)
     word_count_range = st.slider(
-        "📝 Longitud de reseña (# de palabras):",
+        "Review Length (# of words):",
         min_value=1,
         max_value=300,
         value=(3, 200),
-        help="Descarta reseñas demasiado cortas o extremadamente largas."
+        help="Discard reviews that are too short or extremely long."
     )
     
-    # Filtro por Palabra Clave
+    # Keyword Filter
     keyword_filter = st.text_input(
-        "🎯 Filtrar por palabra clave:",
+        "Filter by keyword:",
         value="",
-        placeholder="Ej: battery, shipping, screen...",
-        help="Si escribes algo aquí, el motor sólo procesará las reseñas que contengan esta palabra exacto."
+        placeholder="E.g., battery, shipping, screen...",
+        help="If you enter a keyword here, the engine will only process reviews that contain this exact word."
     )
 
     st.markdown("---")
-    st.subheader("⚙️ Rendimiento en la Nube")
+    st.subheader("Cloud Performance")
     
-    # Recomendación para Streamlit Cloud (tope inteligente en 8 hilos para evitar caídas de RAM)
+    # Recommendation for Streamlit Cloud (smart limit at 8 threads to prevent RAM crashes)
     system_cores = min(os.cpu_count() or 4, 8)
     num_threads = st.slider(
-        "Hilos Concurrentes (vCPUs Cloud)", 
+        "Concurrent Threads (Cloud vCPUs)", 
         min_value=1, 
         max_value=8, 
         value=system_cores,
-        help="Ajustado al límite de seguridad para la nube de Streamlit Cloud (máx. 8 hilos)."
+        help="Adjusted to the safety limit for Streamlit Cloud (max 8 threads)."
     )
-    top_words_count = st.slider("Top Términos a procesar", min_value=10, max_value=100, value=30)
-    lines_batch = st.select_slider("Líneas en RAM por lote", options=[10000, 25000, 50000, 100000], value=25000)
+    top_words_count = st.slider("Top Terms to process", min_value=10, max_value=100, value=30)
+    lines_batch = st.select_slider("Lines in RAM per batch", options=[10000, 25000, 50000, 100000], value=25000)
 
-# --- 5. PANEL PRINCIPAL ---
-st.title("⚡ E-Commerce Sentiment Analytics Engine")
-st.caption("Arquitectura asistida por IA (VADER NLP) - Procesamiento por streaming con soporte de compresión (ZIP / GZ)")
+# --- 5. MAIN PANEL ---
+st.title("E-Commerce Sentiment Analytics Engine")
+st.caption("AI-assisted Architecture (VADER NLP) - Streaming processing with compression support (ZIP / GZ)")
 
 if "is_analyzed" not in st.session_state:
     st.session_state.is_analyzed = False
@@ -285,7 +285,7 @@ if "is_analyzed" not in st.session_state:
     st.session_state.execution_time = 0
 
 if uploaded_file is None:
-    st.info("👈 Por favor, selecciona un archivo (CSV o ZIP) desde la barra lateral.")
+    st.info("Please select a file (CSV or ZIP) from the sidebar.")
 else:
     try:
         file_stream = get_file_stream(uploaded_file)
@@ -295,7 +295,7 @@ else:
         columns = sample_reader[0] if sample_reader else []
 
         if not columns:
-            st.error("No se pudieron detectar columnas en el archivo.")
+            st.error("Could not detect columns in the file.")
         else:
             text_default_idx = 0
             for cand in ["Text", "text", "Review", "review", "Comment", "comment", "Summary"]:
@@ -311,11 +311,11 @@ else:
 
             col_a, col_b = st.columns(2)
             with col_a:
-                text_col_name = st.selectbox("Columna de RESEÑA (Texto):", columns, index=text_default_idx)
+                text_col_name = st.selectbox("REVIEW Column (Text):", columns, index=text_default_idx)
             with col_b:
-                rating_col_name = st.selectbox("Columna de CALIFICACIÓN (Rating):", columns, index=rating_default_idx)
+                rating_col_name = st.selectbox("RATING Column (Score):", columns, index=rating_default_idx)
 
-            if st.button("🚀 Iniciar Análisis con Filtros"):
+            if st.button("Start Analysis with Filters"):
                 text_idx = columns.index(text_col_name)
                 rating_idx = columns.index(rating_col_name)
                 
@@ -325,7 +325,7 @@ else:
                 stats = {"pos_reviews": 0, "neg_reviews": 0, "filtered_out": 0}
                 total_records = 0
                 
-                with st.spinner("Procesando tu archivo por lotes y aplicando filtros..."):
+                with st.spinner("Processing your file in batches and applying filters..."):
                     while True:
                         batch = [file_stream.readline() for _ in range(lines_batch)]
                         batch = [line for line in batch if line]
@@ -372,9 +372,9 @@ else:
                 st.session_state.is_analyzed = True
 
     except Exception as e:
-        st.error(f"Error procesando el archivo: {str(e)}")
+        st.error(f"Error processing file: {str(e)}")
 
-# --- 6. VISUALIZACIÓN ---
+# --- 6. VISUALIZATION ---
 if st.session_state.is_analyzed:
     pos_counter = st.session_state.pos_counter
     neg_counter = st.session_state.neg_counter
@@ -382,10 +382,10 @@ if st.session_state.is_analyzed:
     
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Líneas Analizadas", f"{st.session_state.total_records:,}")
-    m2.metric("Descartadas p/ Filtros", f"{stats['filtered_out']:,}")
-    m3.metric("Tiempo de Cálculo", f"{st.session_state.execution_time} seg")
-    m4.metric("Hilos Ejecutados", f"{num_threads}")
+    m1.metric("Analyzed Lines", f"{st.session_state.total_records:,}")
+    m2.metric("Filtered Out", f"{stats['filtered_out']:,}")
+    m3.metric("Computation Time", f"{st.session_state.execution_time} sec")
+    m4.metric("Executed Threads", f"{num_threads}")
 
     st.markdown("---")
     c_pos, c_neg = st.columns(2)
@@ -394,11 +394,11 @@ if st.session_state.is_analyzed:
     pos_rate = round((stats["pos_reviews"] / total_eval) * 100, 1)
     neg_rate = round((stats["neg_reviews"] / total_eval) * 100, 1)
 
-    # --- TARJETA Y WORDCLOUD POSITIVO ---
+    # --- POSITIVE CARD AND WORDCLOUD ---
     with c_pos:
         tcol1, tcol2 = st.columns([0.8, 0.2])
         with tcol1:
-            st.markdown("### 🟢 Customer Satisfaction Analytics")
+            st.markdown("### Customer Satisfaction Analytics")
         with tcol2:
             st.markdown(
                 '<div style="text-align: right; padding-top: 6px;"><span style="background-color: #dcfce7; color: #15803d; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold;">POSITIVE</span></div>', 
@@ -441,18 +441,18 @@ if st.session_state.is_analyzed:
             
             col_info, col_btn = st.columns([1.3, 1])
             with col_info:
-                st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>📌 {len(pos_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>TERMS INDEXED BY AI: {len(pos_counter):,}</div>", unsafe_allow_html=True)
             with col_btn:
-                if st.button("📊 View Full Frequency Tally ➔", key="btn_pos", use_container_width=True):
+                if st.button("View Full Frequency Tally", key="btn_pos", use_container_width=True):
                     show_frequency_tally(pos_counter, "positive", top_words_count)
         else:
-            st.info("La IA no detectó tokens strictly positivos (o fueron filtrados).")
+            st.info("AI detected no strictly positive tokens (or they were filtered out).")
 
-    # --- TARJETA Y WORDCLOUD NEGATIVO ---
+    # --- NEGATIVE CARD AND WORDCLOUD ---
     with c_neg:
         tcol1_n, tcol2_n = st.columns([0.8, 0.2])
         with tcol1_n:
-            st.markdown("### 🔴 Critical Customer Frustrations")
+            st.markdown("### Critical Customer Frustrations")
         with tcol2_n:
             st.markdown(
                 '<div style="text-align: right; padding-top: 6px;"><span style="background-color: #fee2e2; color: #b91c1c; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold;">NEGATIVE</span></div>', 
@@ -495,30 +495,30 @@ if st.session_state.is_analyzed:
             
             col_info_n, col_btn_n = st.columns([1.3, 1])
             with col_info_n:
-                st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>📌 {len(neg_counter):,} TERMS INDEXED BY AI</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-family: monospace; color: #a1a1aa; padding-top: 10px; font-size: 13px;'>TERMS INDEXED BY AI: {len(neg_counter):,}</div>", unsafe_allow_html=True)
             with col_btn_n:
-                if st.button("📊 View Full Frequency Tally ➔", key="btn_neg", use_container_width=True):
+                if st.button("View Full Frequency Tally", key="btn_neg", use_container_width=True):
                     show_frequency_tally(neg_counter, "negative", top_words_count)
         else:
-            st.info("La IA no detectó tokens estrictamente negativos (o fueron filtrados).")
+            st.info("AI detected no strictly negative tokens (or they were filtered out).")
 
-    # --- GRÁFICA MULTIVARIABLE ---
+    # --- MULTIVARIATE CHART ---
     st.markdown("---")
-    st.subheader("📊 Frecuencia Comparativa (Plotly Express)")
+    st.subheader("Comparative Frequency (Plotly Express)")
     
-    pos_data = [{"Palabra": w, "Frecuencia": c, "Sentimiento": "Positivo"} for w, c in pos_counter.most_common(15)]
-    neg_data = [{"Palabra": w, "Frecuencia": c, "Sentimiento": "Negativo"} for w, c in neg_counter.most_common(15)]
+    pos_data = [{"Word": w, "Frequency": c, "Sentiment": "Positive"} for w, c in pos_counter.most_common(15)]
+    neg_data = [{"Word": w, "Frequency": c, "Sentiment": "Negative"} for w, c in neg_counter.most_common(15)]
     
     df_combined = pos_data + neg_data
     if df_combined:
         fig_bar = px.bar(
             df_combined,
-            x="Palabra",
-            y="Frecuencia",
-            color="Sentimiento",
+            x="Word",
+            y="Frequency",
+            color="Sentiment",
             barmode="group",
-            color_discrete_map={"Positivo": "#16a34a", "Negativo": "#dc2626"},
-            title="Top Términos Comparativos Validados por IA"
+            color_discrete_map={"Positive": "#16a34a", "Negative": "#dc2626"},
+            title="Top Comparative Terms Validated by AI"
         )
         fig_bar.update_layout(template="plotly_dark", height=420)
         st.plotly_chart(fig_bar, use_container_width=True)
