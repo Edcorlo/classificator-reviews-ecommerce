@@ -190,7 +190,7 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
 <div style="display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #f8fafc;">
     <div style="width: 8%; color: #cbd5e1; font-family: monospace;">{idx+1:02d}</div>
     <div style="width: 42%;">
-        <div style="font-weight: 500; color: #1e293b; font-size: 14px;">{term}</div>
+        <div style="font-weight: 500; color: #f8fafc; font-size: 14px;">{term}</div>
         <div style="height: 4px; background-color: #f1f5f9; width: 85%; border-radius: 2px;">
             <div style="height: 100%; background-color: {color}; width: {bar_width}%; border-radius: 2px;"></div>
         </div>
