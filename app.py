@@ -162,7 +162,7 @@ def process_lines_chunk(
     stats["neg_reviews"] += local_neg_count
     stats["filtered_out"] += local_filtered_out
 
-# --- 3. DETAILED FREQUENCY MODAL ---
+# --- 3. MODAL DE FRECUENCIA DETALLADA ---
 @st.dialog("Full Frequency Tally", width="large")
 def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
     top_terms = counter.most_common(top_n)
@@ -172,10 +172,21 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
     bg_color = "#dcfce7" if sentiment_type == "positive" else "#fee2e2"
     tag = "POSITIVE SENTIMENT" if sentiment_type == "positive" else "NEGATIVE SENTIMENT"
         
+    # Cabecera general del modal
     st.markdown(f"""
-<div style="margin-bottom: 24px;">
+<div style="margin-bottom: 20px;">
     <span style="background-color: {bg_color}; color: {color}; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-family: monospace; font-weight: bold;">{tag}</span>
-    <div style="color: #64748b; font-size: 14px; margin-top: 12px; font-family: monospace;">Customer Satisfaction • {len(top_terms)} terms • {total_occurrences:,} occurrences</div>
+    <div style="color: #64748b; font-size: 14px; margin-top: 10px; font-family: monospace;">Customer Satisfaction • {len(top_terms)} terms • {total_occurrences:,} occurrences</div>
+</div>
+""", unsafe_allow_html=True)
+    
+    # --- NUEVO: ENCABEZADO DE LAS COLUMNAS ---
+    st.markdown("""
+<div style="display: flex; align-items: center; padding: 8px 0; border-bottom: 2px solid #475569; margin-bottom: 8px; font-family: monospace; font-size: 12px; font-weight: bold; color: #94a3b8; text-transform: uppercase;">
+    <div style="width: 8%;">#</div>
+    <div style="width: 42%;">TERM / KEYWORD</div>
+    <div style="width: 15%; text-align: right;">SHARE (%)</div>
+    <div style="width: 35%; text-align: right;">OCCURRENCES</div>
 </div>
 """, unsafe_allow_html=True)
     
@@ -187,20 +198,19 @@ def show_frequency_tally(counter: Counter, sentiment_type: str, top_n: int):
         bar_width = (count / max_count) * 100 
         
         html_rows += f"""
-<div style="display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #f8fafc;">
-    <div style="width: 8%; color: #cbd5e1; font-family: monospace;">{idx+1:02d}</div>
+<div style="display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(148, 163, 184, 0.15);">
+    <div style="width: 8%; color: #94a3b8; font-family: monospace; font-size: 13px;">{idx+1:02d}</div>
     <div style="width: 42%;">
-        <div style="font-weight: 500; color: #f8fafc; font-size: 14px;">{term}</div>
-        <div style="height: 4px; background-color: #f1f5f9; width: 85%; border-radius: 2px;">
+        <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">{term}</div>
+        <div style="height: 4px; background-color: rgba(148, 163, 184, 0.2); width: 85%; border-radius: 2px;">
             <div style="height: 100%; background-color: {color}; width: {bar_width}%; border-radius: 2px;"></div>
         </div>
     </div>
-    <div style="width: 15%; text-align: right; color: #94a3b8; font-family: monospace;">{share:.1f}%</div>
-    <div style="width: 35%; text-align: right; color: {color}; font-family: monospace; font-weight: bold;">{count:,}</div>
+    <div style="width: 15%; text-align: right; color: #94a3b8; font-family: monospace; font-size: 13px;">{share:.1f}%</div>
+    <div style="width: 35%; text-align: right; color: {color}; font-family: monospace; font-weight: bold; font-size: 14px;">{count:,}</div>
 </div>
 """
     st.markdown(html_rows, unsafe_allow_html=True)
-
 # --- SMART FILE STREAM FUNCTION ---
 def get_file_stream(uploaded):
     name_lower = uploaded.name.lower()
